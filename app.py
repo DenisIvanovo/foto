@@ -1,7 +1,7 @@
 import os
 from flask import Flask, request, render_template, url_for, redirect, flash
 from flask_sqlalchemy import SQLAlchemy  # Модуль для подключенния к базе данных.
-from flask_login import LoginManager
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_mail import Mail, Message
 from werkzeug.utils import secure_filename
 import datetime
@@ -13,30 +13,36 @@ from werkzeug.security import check_password_hash
 with open('info_mail.json', 'r')as file:  # Получаем данные для работы с почтой.
     info = json.load(file)
 
-# /home/DenisMor/mysite/static/zag/
 UPLOAD_FOLDER = './static/'  # Путь по которому загружаем файлы.
-ALLOWED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'gif']  # Формат загружаемых файлов.
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Максимальный размер загружаемого файла.
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///photo_website.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'fgvfhghyhgddfrrghghg'  # Секретный ключ для работы с формами.
-app.config['MAIL_SERVER'] = info['SERVER']  # Получаем имя сервера.
-app.config['MAIL_PORT'] = info['PORT']  # Получаем порт.
-app.config['MAIL_USE_TLS'] = False
-app.config['MAIL_USE_SSL'] = True
-app.config['MAIL_USERNAME'] = info['USERNAME']  # введите свой адрес электронной почты здесь
-app.config['MAIL_DEFAULT_SENDER'] = info['DEFAULT_SENDER']
-app.config['MAIL_PASSWORD'] = info['PASSWORD']  # введите пароль
-db = SQLAlchemy(app)
-mail = Mail(app)
+ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif']  # Формат загружаемых файлов.
+application = Flask(__name__)
+application.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+application.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Максимальный размер загружаемого файла.
+application.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///photo_website.db'
+application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+application.config['SECRET_KEY'] = 'fgvfhghyhgddfrrghghg'  # Секретный ключ для передачи сообщений.
+application.config['MAIL_SERVER'] = info['SERVER']  # Получаем имя сервера.
+application.config['MAIL_PORT'] = info['PORT']  # Получаем порт.
+application.config['MAIL_USE_TLS'] = False
+application.config['MAIL_USE_SSL'] = True
+application.config['MAIL_USERNAME'] = info['USERNAME']  # введите свой адрес электронной почты здесь
+application.config['MAIL_DEFAULT_SENDER'] = ('bot-photo-storage.ru ', info['DEFAULT_SENDER'])
+application.config['MAIL_PASSWORD'] = info['PASSWORD']  # введите пароль
+db = SQLAlchemy(application)
+mail = Mail(application)
+login_manager = LoginManager()
+login_manager.init_app(application)
+# Если пользователь НЕ авторизован перекидываем его на страничку авторизации.
+login_manager.login_view = 'main'
+authorization_attempt = 3  # Попытки авторизоваться.
 
 
-# login_manger = LoginManager(app)
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
 
-class User(db.Model):
+class User(UserMixin, db.Model):
     # Создаем колонки в базе данных.
     # Вводим данные зарегистрированных пользователей.
     id = db.Column(db.Integer, primary_key=True)
@@ -52,6 +58,8 @@ class User(db.Model):
 
 def allowed_file(filename):
     # Проверяем какого формата загружаемый файл.
+    print(filename)
+    print(filename.rsplit('.', 1)[1])
     return '.' in filename and \
            filename.rsplit('.', 1)[1] in ALLOWED_EXTENSIONS
 
@@ -70,57 +78,69 @@ def app_separator():
         pass
 
 
-@app.route('/', methods=['GET', 'POST'])
+@application.route('/', methods=['GET', 'POST'])
 def main():
+    global authorization_attempt
     form = Aut_form()
-    if form.validate_on_submit():  # Обрабатываем метод POST
-        login = User.query.filter_by(user_nic=form.username.data).first()  # Делаем запрос к базе дыннх.
-        if login is None:
-            #  Если такого пользователя нет в базе данных
-            flash(f'Пользователь {form.username.data} НЕ зарегистрирован на сайте. ')
-            return redirect(url_for('main'))
-        else:
-            if check_password_hash(login.password, form.password.data):
-                return redirect(url_for('photo'))
-            else:
-                flash('Неправильный пароль')
-                return redirect(url_for('main'))
+    # Если user авторизовался НЕ удачно 3 раза.
+    # Блокируем user на 1 час по причине подозрения подбора пароля и логина.
+    if authorization_attempt == 0:
+        # Перекидываем user на страницу блокировки.
+        return redirect(url_for('lockdown'))
     else:
-        return render_template('authentication.html', form=form)
+        if form.validate_on_submit():  # Обрабатываем метод POST
+            login = User.query.filter_by(user_nic=form.username.data).first()  # Делаем запрос к базе дыннх.
+            if login is None:
+                #  Если такого пользователя нет в базе данных
+                authorization_attempt -= 1  # Уменьшаем количество авторизации.
+                print(authorization_attempt)
+                flash(f'Пользователь {form.username.data} НЕ зарегистрирован на сайте. ')
+                return redirect(url_for('main'))
+            else:
+                if check_password_hash(login.password, form.password.data):
+                    login_user(login)
+                    return redirect(url_for('stub'))
+                else:
+                    flash('Неправильный пароль')
+                    authorization_attempt -= 1  # Уменьшаем количество авторизации.
+                    print(authorization_attempt)
+                    return redirect(url_for('main'))
+        else:
+            return render_template('authentication.html', form=form)
 
 
-@app.route('/append', methods=['GET', 'POST'])
+@application.route('/append', methods=['GET', 'POST'])
+@login_required
 def upload_file():
     if request.method == 'POST':
         file_users = request.files['file']  # Получаем файл через метод POST
         if file_users and allowed_file(file_users.filename):  # Проверяем формат полученого файла.
             # Если поддерживающий формат файла.
             if file_users.filename in new_photo:  # Выполняем проверку на повторную загрузку файла.
-                print('Такой файл есть')
-                return render_template('images.html', photo=new_photo)
+                flash('Такой файл есть')
+                return render_template('images.html', photo=new_photo, info_user=current_user)
             else:
                 app_separator()
                 date = datetime.date.today()
-                new_photo.append({'name': file_users.filename,
-                                  'data': date,
-                                  'info': file_users.filename.rsplit('.', 1)[1]})
+                new_photo.append(file_users.filename)  # Добавляем имя файла в список.
                 print(len(new_photo))
                 filename = secure_filename(file_users.filename)
-                file_users.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                return render_template('images.html', photo=new_photo)
-    return render_template('images.html')
+                file_users.save(os.path.join(application.config['UPLOAD_FOLDER'], filename))  # Сохраняем полученый файл
+                return render_template('images.html', photo=new_photo, info_user=current_user)
+    return render_template('images.html', info_user=current_user)
 
 
-@app.route('/photo', methods=['GET', 'POST'])
+@application.route('/photo', methods=['GET', 'POST'])
+@login_required
 def photo():
     # Главная страница сайта.
-    return render_template('main.html')
+    return render_template('main.html', info_user=current_user)
 
 
 from new_user import New_user  # Регистрируем нового пользователя.
 
 
-@app.route('/registration', methods=['GET', 'POST'])
+@application.route('/registration', methods=['GET', 'POST'])
 # Регистрируем на сайте нового пользователя.
 def registration():
     form = RegistrationForm()
@@ -131,6 +151,9 @@ def registration():
         # Если пользователь с таком Email нет в базе данных,регистрируем его
         if email is None:
             New_user(form)  # Данны с формы отправляем в другой модуль,для записи в db
+            flash('Регистрация прошла успешно.\n'
+                  'Пожалуйста, перейдите по ссылке, чтобы подтвердить свою регистрацию.\n'
+                  'Мы отправили электронное письмо на указанный почтовый адрес.')
             return redirect(url_for('main'))
         else:
             # Если пользователь с таким Email зарегистрирован в базе,тогда сообщаем об этом.
@@ -140,18 +163,13 @@ def registration():
         return render_template('registration.html', form=form)
 
 
-@app.errorhandler(404)
-def mistake(error):
-    # В этой функции обрабатываем ошибку 404
-    return render_template('404.html'), 404
-
-
-@app.route('/user', methods=['POST', 'GET'])
+@application.route('/user', methods=['POST', 'GET'])
+@login_required
 def user():
     # Получаем имя пользователя и ник
     if request.method == 'POST':
         info_users = User_online.online(User)
-        return render_template('user.html', info=info_users)
+        render_template('user.html', info=info_users)
     else:
         return render_template('user.html')
 
@@ -159,7 +177,7 @@ def user():
 from recovery import Recovery  # Импортируем модуль для востановления пароля.
 
 
-@app.route('/password_recovery', methods=['POST', 'GET'])
+@application.route('/password_recovery', methods=['POST', 'GET'])
 def password_recovery():
     # Восстанавливаем пароль пользователя.
     form = Password_recovery()
@@ -171,7 +189,7 @@ def password_recovery():
             flash('Введенный адрес электронной почты не зарегистрирован.')
             return redirect(url_for('password_recovery'))
         else:
-            Recovery(form, site_user)
+            Recovery(form)
             flash(f'Мы отправии инструкцию по восановлению пароля на указаный почтовый адрес.')
             return redirect(url_for('password_recovery'))
     else:
@@ -181,11 +199,53 @@ def password_recovery():
 from update_password import Update
 
 
-@app.route('/update_password/<string:email>', methods=['GET', 'POST'])
+@application.route('/update_password/<string:email>', methods=['GET', 'POST'])
 def update_password(email):
-    Update()
-    return render_template('main.html')
+    # Записываем новый пароль в базу данных.
+    form = Update_password()
+    if form.validate_on_submit():  # Обрабатываем метод POST
+        result = Update.new_password(form, email)  # Передаем новый пароль,email в другой модуль.
+        flash(result)  # Передаем результат функции.
+        return redirect(url_for('main'))  # Перенапровяем на главную страницу.
+    else:
+        return render_template('new_password.html', form=form)
 
 
-if __name__ == '__main__':
-    app.run(debug=True)
+@application.route('/contacts')
+def contacts():
+    # Страничка контакты,обратная форма связи.
+    return render_template('feedback_form.html')
+
+@application.route('/logout')
+def logout():
+    # Выход из системы.
+    logout_user()
+    return redirect(url_for('main'))  # Перенаправляем пользователя н аглавную страницу.
+
+
+@application.errorhandler(404)
+def mistake(error):
+    # В этой функции обрабатываем ошибку 404
+    return render_template('404.html'), 404
+
+
+@application.errorhandler(500)
+def mistake_500(error):
+    # Обрабатываем ошибку 500
+    return render_template('500.html')
+
+
+@application.route('/loc')
+# Страница блогировки пользователя.
+def lockdown():
+    return render_template('lockdown.html')
+
+
+@application.route('/stub')
+# Страница заглушка(пока иду изменения станицы)
+def stub():
+    return render_template('stub.html', info_user=current_user)
+
+
+if __name__ == "__main__":
+    application.run(host='0.0.0.0')
