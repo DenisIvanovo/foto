@@ -36,7 +36,7 @@ class RegistrationForm(FlaskForm):
 
 class Password_recovery(FlaskForm):
     # Создаем класс для восстановления пароля.
-    address = StringField(label='Email', validators=[Email()])
+    address = StringField(label='Email           ', validators=[Email()])
     submit = SubmitField('Восстановить пароль')
 
 
@@ -50,3 +50,4 @@ class Update_password(FlaskForm):
     password_2 = PasswordField(label='Повторите пароль', validators=[Required(),
                                                                      EqualTo('password', message='Пароли\n'
                                                                                                  'несовподают')])
+    submit = SubmitField('Записать пароль')

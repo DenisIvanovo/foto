@@ -1,7 +1,7 @@
 from app import db, User
 import os
 from werkzeug.security import generate_password_hash
-
+from registration_message import Message_info
 
 class New_user:
     def __init__(self, form):
@@ -33,5 +33,7 @@ class New_user:
             # Создаем папку, для имени папки используем ник и email пользователя.
             # ник и email берем из формы.
             os.mkdir(f"{user_nic}-{email}")
+            # Оповещаем пользователя о успешной регистрации.
+            Message_info(email)
         except OSError:
             pass
